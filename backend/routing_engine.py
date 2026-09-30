@@ -156,16 +156,32 @@ class NetworkRoutingEngine:
                 return 0.5
             return max(0.0, min(1.0, (val - low) / (high - low)))
 
+        # Calculate dynamic effective delay (propagation delay + buffer queuing delay based on congestion)
+        eff_delays = []
         for u, v, data in composite_G.edges(data=True):
+            cong = float(data.get("congestion", 0.0))
+            prop_delay = float(data.get("delay", 10.0))
+            q_factor = 1.0 + (cong / max(5.0, 100.0 - min(cong, 95.0))) * 0.5
+            eff_delays.append(prop_delay * q_factor)
+        min_eff_t = min(eff_delays) if eff_delays else 1.0
+        max_eff_t = max(eff_delays) if eff_delays else 100.0
+
+        for u, v, data in composite_G.edges(data=True):
+            cong = float(data.get("congestion", 0.0))
+            prop_delay = float(data.get("delay", 10.0))
+            q_factor = 1.0 + (cong / max(5.0, 100.0 - min(cong, 95.0))) * 0.5
+            eff_delay = prop_delay * q_factor
+
             d_norm = min_max_norm(data["distance"], norm_ranges["distance"])
-            t_norm = min_max_norm(data["delay"], norm_ranges["delay"])
-            c_norm = min_max_norm(data["congestion"], norm_ranges["congestion"])
+            t_norm = min_max_norm(eff_delay, (min_eff_t, max_eff_t))
+            c_norm = min_max_norm(cong, norm_ranges["congestion"])
             k_norm = min_max_norm(data["cost"], norm_ranges["cost"])
 
             # Composite cost formula
             # Epsilon ensures non-zero strictly positive cost for Dijkstra
             comp_cost = (wd * d_norm) + (wt * t_norm) + (wc * c_norm) + (wk * k_norm) + 0.001
 
+            data["effective_delay"] = round(eff_delay, 2)
             data["d_norm"] = round(d_norm, 4)
             data["t_norm"] = round(t_norm, 4)
             data["c_norm"] = round(c_norm, 4)

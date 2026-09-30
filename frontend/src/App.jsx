@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Flame, ShieldCheck, Shuffle } from 'lucide-react';
 import Header from './components/Header';
 import NetworkConfig from './components/NetworkConfig';
 import TopologyCanvas from './components/TopologyCanvas';
@@ -31,6 +31,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [lastApiResponse, setLastApiResponse] = useState(null);
+  const [conditionStatus, setConditionStatus] = useState(null);
 
   // Inspector state
   const [selectedNode, setSelectedNode] = useState(null);
@@ -153,6 +154,7 @@ export default function App() {
   const handleSelectPreset = async (newPresetId) => {
     try {
       setLoading(true);
+      setConditionStatus(null);
       addLog(`Loading topology preset '${newPresetId}'...`, 'info');
       const res = await fetch(`${API_BASE}/network/preset`, {
         method: 'POST',
@@ -202,43 +204,79 @@ export default function App() {
   };
 
   // 5. Dynamic Condition Injections
-  const handleInjectBottleneck = () => {
+  const handleInjectBottleneck = async () => {
     const targetEdge = edges.find((e) => e.id === 'N2-N4' || e.id === 'R2-R4' || e.id === 'N1-N2') || edges[0];
     if (targetEdge) {
-      handleUpdateEdge({
-        edge_id: targetEdge.id,
-        source: targetEdge.source,
-        target: targetEdge.target,
-        congestion: 85.0,
-        delay: 24.0
+      await fetch(`${API_BASE}/network/edge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          edge_id: targetEdge.id,
+          source: targetEdge.source,
+          target: targetEdge.target,
+          congestion: 85.0,
+          delay: 24.0
+        })
+      });
+      setEdges((prev) =>
+        prev.map((e) =>
+          e.id === targetEdge.id ? { ...e, congestion: 85.0, delay: 24.0 } : e
+        )
+      );
+      setConditionStatus({
+        type: 'bottleneck',
+        title: `Bottleneck Injected on Link ${targetEdge.source}-${targetEdge.target} (85% Congestion)`,
+        description: `Link load surged to 85% causing high queuing latency. Dijkstra stays on the congested link (blind to traffic), while Intelligent QoS routing steers packets around it.`
       });
       addLog(`TRAFFIC INJECTION: Link ${targetEdge.source}-${targetEdge.target} congestion surged to 85%`, 'calc');
+      handleComputeRoute(source, destination, weights);
     }
   };
 
-  const handleClearCongestion = () => {
-    edges.forEach((e) => {
-      handleUpdateEdge({
-        edge_id: e.id,
-        source: e.source,
-        target: e.target,
-        congestion: 12.0
-      });
+  const handleClearCongestion = async () => {
+    const clearedEdges = edges.map((e) => ({
+      edge_id: e.id,
+      source: e.source,
+      target: e.target,
+      congestion: 12.0
+    }));
+    await fetch(`${API_BASE}/network/batch-update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ edges: clearedEdges })
+    });
+    setEdges((prev) => prev.map((e) => ({ ...e, congestion: 12.0 })));
+    setConditionStatus({
+      type: 'cleared',
+      title: 'Network Congestion Cleared (All Links: 12% Healthy)',
+      description: 'All links restored to healthy 12% load. Because congestion is minimal everywhere, the shortest physical distance path is optimal and both algorithms agree.'
     });
     addLog('NETWORK RECOVERY: Traffic congestion cleared across all communication links', 'info');
+    handleComputeRoute(source, destination, weights);
   };
 
-  const handleRandomizeTraffic = () => {
-    edges.forEach((e) => {
-      const randCong = Math.floor(Math.random() * 75) + 10;
-      handleUpdateEdge({
-        edge_id: e.id,
-        source: e.source,
-        target: e.target,
-        congestion: randCong
-      });
+  const handleRandomizeTraffic = async () => {
+    const randEdges = edges.map((e) => ({
+      edge_id: e.id,
+      source: e.source,
+      target: e.target,
+      congestion: Math.floor(Math.random() * 75) + 10
+    }));
+    await fetch(`${API_BASE}/network/batch-update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ edges: randEdges })
+    });
+    setEdges((prev) =>
+      prev.map((e, idx) => ({ ...e, congestion: randEdges[idx].congestion }))
+    );
+    setConditionStatus({
+      type: 'fluctuating',
+      title: 'Live Traffic Fluctuation Injected Across All Links',
+      description: 'Randomized realistic queue loads injected across the topology. Review how the composite cost matrix and routing choices adapt.'
     });
     addLog('LIVE TRAFFIC: Fluctuating realistic packet queue loads across the network', 'calc');
+    handleComputeRoute(source, destination, weights);
   };
 
   // 1-Click Divergence Demo trigger for live presentation
@@ -265,6 +303,11 @@ export default function App() {
 
     const divergenceWeights = { distance: 0.15, delay: 0.20, congestion: 0.55, cost: 0.10 };
     setWeights(divergenceWeights);
+    setConditionStatus({
+      type: 'bottleneck',
+      title: 'Divergence Demonstrated: Bottleneck Injected + Congestion Profile Applied',
+      description: 'Dijkstra stays on the shortest wire (41 km, 86 ms delay). Intelligent QoS rerouted via N1-N3-N5-N6 (60 ms delay, saving 26 ms).'
+    });
     addLog('DIVERGENCE TRIGGERED: Applied 85% bottleneck on N2-N4 and Congestion-Sensitive QoS profile', 'calc');
     await handleComputeRoute(source, destination, divergenceWeights);
   };
@@ -415,7 +458,7 @@ export default function App() {
         padding: '1.5rem 2rem',
         display: 'flex',
         flexDirection: 'column',
-        gap: '1.5rem'
+        gap: '1.25rem'
       }}>
         {/* Error notification banner (No emojis) */}
         {error && (
@@ -437,6 +480,53 @@ export default function App() {
             <button
               onClick={() => setError(null)}
               style={{ background: 'none', border: 'none', color: 'inherit', fontWeight: 700, cursor: 'pointer' }}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Live Active Condition Feedback Banner */}
+        {conditionStatus && (
+          <div style={{
+            backgroundColor: conditionStatus.type === 'bottleneck' ? '#FAF0ED' : (conditionStatus.type === 'cleared' ? '#EAF4EC' : 'var(--color-surface-subtle)'),
+            border: `1px solid ${conditionStatus.type === 'bottleneck' ? '#E8B4AC' : (conditionStatus.type === 'cleared' ? '#B0D7B8' : 'var(--color-taupe-border)')}`,
+            padding: '0.75rem 1.25rem',
+            borderRadius: '6px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '1rem',
+            boxShadow: '0 1px 4px rgba(23, 21, 21, 0.04)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              {conditionStatus.type === 'bottleneck' ? (
+                <Flame size={20} style={{ color: 'var(--color-congested)', flexShrink: 0 }} />
+              ) : conditionStatus.type === 'cleared' ? (
+                <ShieldCheck size={20} style={{ color: 'var(--color-intelligent)', flexShrink: 0 }} />
+              ) : (
+                <Shuffle size={20} style={{ color: 'var(--color-rose-taupe)', flexShrink: 0 }} />
+              )}
+              <div>
+                <strong style={{ fontSize: '0.88rem', color: 'var(--color-near-black)', display: 'block' }}>
+                  {conditionStatus.title}
+                </strong>
+                <span style={{ fontSize: '0.8rem', color: 'var(--color-muted-taupe)' }}>
+                  {conditionStatus.description}
+                </span>
+              </div>
+            </div>
+            <button
+              onClick={() => setConditionStatus(null)}
+              style={{
+                background: 'none',
+                border: 'none',
+                fontSize: '0.76rem',
+                color: 'var(--color-muted-taupe)',
+                cursor: 'pointer',
+                fontWeight: 600,
+                textDecoration: 'underline'
+              }}
             >
               Dismiss
             </button>

@@ -147,6 +147,20 @@ def update_edge(req: EdgeUpdateRequest):
         "topology": engine.get_topology()
     }
 
+class BatchEdgeUpdateRequest(BaseModel):
+    edges: List[Dict[str, Any]]
+
+@app.post("/api/network/batch-update")
+def batch_update_edges(req: BatchEdgeUpdateRequest):
+    """Batch update multiple edges simultaneously (e.g. clear or randomize traffic)."""
+    for e in req.edges:
+        edge_id = e.get("edge_id") or e.get("id") or f"{e.get('source')}-{e.get('target')}"
+        engine.update_edge(edge_id, e)
+    return {
+        "message": f"Updated {len(req.edges)} communication links successfully",
+        "topology": engine.get_topology()
+    }
+
 @app.post("/api/network/node")
 def add_node(req: AddNodeRequest):
     """Add a new router node to the graph."""
